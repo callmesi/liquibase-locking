@@ -40,7 +40,7 @@ public class LockServiceExt extends StandardLockService {
                     try {
                         String lockedBy = Scope.getCurrentScope().getSingleton(ExecutorService.class).getExecutor("jdbc", database).queryForObject(
                                 new SelectFromDatabaseChangeLogLockStatement("LOCKEDBY"), String.class);
-                        if (lockedBy != null && !lockedBy.isBlank()) {
+                        if (lockedBy != null && !lockedBy.trim().equals("")) {
                             LOG.warning("!!!!!  Database is locked by: " + lockedBy + " !!!!!");
                             StringTokenizer tok = new StringTokenizer(lockedBy, LOCKED_BY_SEPARATOR);
                             if (tok.countTokens() >= 2) {
