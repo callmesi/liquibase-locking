@@ -1,24 +1,25 @@
 package liquibase.lockservice.ext;
 
-import liquibase.Scope;
-import liquibase.database.Database;
-import liquibase.exception.DatabaseException;
-import liquibase.exception.LockException;
-import liquibase.executor.ExecutorService;
-import liquibase.lockservice.StandardLockService;
-import liquibase.logging.Logger;
-import liquibase.statement.core.RawSqlStatement;
-import liquibase.statement.core.SelectFromDatabaseChangeLogLockStatement;
+import static liquibase.lockservice.ext.LockDatabaseChangeLogGeneratorExt.LOCKED_BY_SEPARATOR;
 
 import java.util.List;
 import java.util.Map;
 import java.util.StringTokenizer;
 
-import static liquibase.lockservice.ext.LockDatabaseChangeLogGeneratorExt.LOCKED_BY_SEPARATOR;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import liquibase.database.Database;
+import liquibase.exception.DatabaseException;
+import liquibase.exception.LockException;
+import liquibase.executor.ExecutorService;
+import liquibase.lockservice.StandardLockService;
+import liquibase.statement.core.RawSqlStatement;
+import liquibase.statement.core.SelectFromDatabaseChangeLogLockStatement;
 
 public class LockServiceExt extends StandardLockService {
 
-    private final static Logger LOG = Scope.getCurrentScope().getLog(LockServiceExt.class);
+    private static final Logger log = LoggerFactory.getLogger(LockServiceExt.class);
 
     @Override
     public int getPriority() {
@@ -33,58 +34,59 @@ public class LockServiceExt extends StandardLockService {
     @Override
     public void waitForLock() throws LockException {
         try {
-            if (this.hasDatabaseChangeLogLockTable()) {
-                Boolean locked = Scope.getCurrentScope().getSingleton(ExecutorService.class).getExecutor("jdbc", database).queryForObject(
-                        new SelectFromDatabaseChangeLogLockStatement("LOCKED"), Boolean.class);
-                if (locked != null && locked == Boolean.TRUE) {
-                    try {
-                        String lockedBy = Scope.getCurrentScope().getSingleton(ExecutorService.class).getExecutor("jdbc", database).queryForObject(
-                                new SelectFromDatabaseChangeLogLockStatement("LOCKEDBY"), String.class);
-                        if (lockedBy != null && !lockedBy.isBlank()) {
-                            LOG.warning("!!!!!  Database is locked by: " + lockedBy + " !!!!!");
-                            StringTokenizer tok = new StringTokenizer(lockedBy, LOCKED_BY_SEPARATOR);
-                            if (tok.countTokens() >= 2) {
-                                String dbPid = tok.nextToken();
-                                String dbPidStart = tok.nextToken();
-                                boolean lockHolderActive = isPidActive(dbPid, dbPidStart);
-                                if (!lockHolderActive) {
-                                    LOG.warning("Database Lock was created by an inactive client (pid=" + dbPid + " , startTime=" + dbPidStart + "). Releasing lock!");
-                                    releaseLock();
-                                } else {
-                                    LOG.warning("Database Lock was created by a still active client (pid=" + dbPid + " , startTime=" + dbPidStart + "). NOT Releasing lock!");
-                                }
+            Boolean locked = ExecutorService.getInstance().getExecutor(database).queryForObject(
+                    new SelectFromDatabaseChangeLogLockStatement("LOCKED"), Boolean.class);
+            if (locked != null && locked == Boolean.TRUE) {
+                try {
+                    String lockedBy = ExecutorService.getInstance().getExecutor(database)
+                            .queryForObject(new SelectFromDatabaseChangeLogLockStatement("LOCKEDBY"),
+                                    String.class);
+                    if (lockedBy != null && !lockedBy.trim().isEmpty()) {
+                        log.warn("Database is locked by: {} ", lockedBy);
+                        StringTokenizer tok = new StringTokenizer(lockedBy, LOCKED_BY_SEPARATOR);
+                        if (tok.countTokens() >= 2) {
+                            String dbPid = tok.nextToken();
+                            String dbPidStart = tok.nextToken();
+                            boolean lockHolderActive = isPidActive(dbPid, dbPidStart);
+                            if (!lockHolderActive) {
+                                log.warn("Database Lock was created by an inactive client (pid={}, startTime={})."
+                                        + " Releasing lock!", dbPid, dbPidStart);
+                                releaseLock();
                             } else {
-                                LOG.warning("Databased is locked, cannot parse LOCKEDBY value: '" + lockedBy + "' in table " + database.getDatabaseChangeLogLockTableName());
+                                log.warn("Database Lock was created by a still active client (pid={}, startTime={}). "
+                                        + "NOT Releasing lock!", dbPid, dbPidStart);
                             }
                         } else {
-                            LOG.severe("Databased is locked but LOCKEDBY information is missing");
+                            log.error("Databased is locked, cannot parse LOCKEDBY value: '{}' in table {}",
+                                    lockedBy, database.getDatabaseChangeLogLockTableName());
                         }
-                    } catch (DatabaseException e) {
-                        LOG.severe("Can't read the LOCKEDBY field from " + database.getDatabaseChangeLogLockTableName(), e);
+                    } else {
+                        log.error("Databased is locked but LOCKEDBY information is missing");
                     }
-                } else {
-                    LOG.warning("****  Databased is not locked **** ");
+                } catch (DatabaseException e) {
+                    log.error("Can't read the LOCKEDBY field from {}", database.getDatabaseChangeLogLockTableName(), e);
                 }
+            } else {
+                log.warn("Databased is not locked");
             }
         } catch (DatabaseException e) {
-            LOG.severe("Can't read the LOCKED field from " + database.getDatabaseChangeLogLockTableName(), e);
+            log.error("Can't read the LOCKED field from " + database.getDatabaseChangeLogLockTableName(), e);
         }
-
         super.waitForLock();
-
     }
 
     private boolean isPidActive(String dbPid, String dbPidStart) {
         try {
-            String sql = String.format("select * from pg_stat_activity where PID=%s and BACKEND_START='%s'", dbPid, dbPidStart);
-            List<Map<String, ?>> rs = Scope.getCurrentScope().getSingleton(ExecutorService.class).getExecutor("jdbc", database).queryForList(new RawSqlStatement(sql));
+            String sql = String.format("select * from pg_stat_activity where PID=%s and BACKEND_START='%s'",
+                    dbPid, dbPidStart);
+            List<Map<String, ?>> rs = ExecutorService.getInstance()
+                    .getExecutor(database).queryForList(new RawSqlStatement(sql));
             if (rs.size() > 0) {
                 return true;
             }
         } catch (DatabaseException e) {
-            LOG.severe(e.getMessage(), e);
+            log.error(e.getMessage(), e);
         }
-
         return false;
     }
 }
